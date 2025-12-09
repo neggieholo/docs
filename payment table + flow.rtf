@@ -1,0 +1,406 @@
+{\rtf1\ansi\ansicpg1252\deff0\nouicompat\deflang1033{\fonttbl{\f0\fnil\fcharset0 Calibri;}{\f1\fnil Calibri;}{\f2\fnil\fcharset1 Cambria Math;}}
+{\*\generator Riched20 10.0.19041}{\*\mmathPr\mmathFont2\mwrapIndent1440 }\viewkind4\uc1 
+\pard\sa200\sl276\slmult1\f0\fs22\lang9 # Clannit-style Payment System \f1\emdash  Full Implementation Pack\par
+\par
+*Comprehensive deliverables: database schema, API endpoints (Node/Express), Flutterwave static virtual account integration, webhook handling, ledger/double-entry model, React/Next.js admin dashboard mockups, architecture diagram, testing & deployment checklist.*\par
+\par
+---\par
+\par
+## 1) High-level architecture\par
+\par
+```\par
+[ Tenant Mobile/Web App ] <---> [ API Gateway (Express) ] <---> [Services]\par
+                                                |\par
+                                                |-- PaymentEngine (Flutterwave integration, VA management)\par
+                                                |-- LedgerService (double-entry, transactions)\par
+                                                |-- BillingService (subscriptions for Estates)\par
+                                                |-- NotificationService (email/SMS)\par
+                                                |-- Admin Dashboard (React/Next.js)\par
+\par
+External: Flutterwave (Virtual Accounts, Transfers), Bank Settlement (Estate corporate account), Notification providers (Twilio/MSG91)\par
+```\par
+\par
+Key roles:\par
+\par
+* Tenant: funds wallet using static VA and pays invoices\par
+* EstateAdmin: owns Trust/Collection corporate account; uploads invoices and manages payouts\par
+* AppCreator: you \emdash  charges subscription/license, receives billing to your corporate account\par
+\par
+---\par
+\par
+## 2) Database schema (Postgres recommended)\par
+\par
+### Main tables (DDL SQL)\par
+\par
+```sql\par
+-- users (tenants, estate_admins, superadmins)\par
+CREATE TABLE users (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  email text UNIQUE NOT NULL,\par
+  phone text,\par
+  fullname text,\par
+  role text NOT NULL, -- 'tenant','estate_admin','superadmin'\par
+  estate_id uuid NULL,\par
+  created_at timestamptz DEFAULT now(),\par
+  updated_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- estates\par
+CREATE TABLE estates (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  name text NOT NULL,\par
+  cac_number text,\par
+  trust_bank_account text, -- real bank account number for settlement\par
+  created_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- virtual_accounts\par
+CREATE TABLE virtual_accounts (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,\par
+  estate_id uuid REFERENCES estates(id) ON DELETE CASCADE,\par
+  provider text NOT NULL, -- 'flutterwave'\par
+  va_account_number text NOT NULL,\par
+  bank_name text,\par
+  bank_code text,\par
+  is_static boolean DEFAULT true,\par
+  metadata jsonb,\par
+  created_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- wallets\par
+CREATE TABLE wallets (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  user_id uuid REFERENCES users(id) UNIQUE,\par
+  balance numeric(14,2) DEFAULT 0,\par
+  currency text DEFAULT 'NGN',\par
+  updated_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- invoices (bills/levies)\par
+CREATE TABLE invoices (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  estate_id uuid REFERENCES estates(id),\par
+  unit_identifier text,\par
+  amount numeric(14,2) NOT NULL,\par
+  due_date date,\par
+  status text DEFAULT 'pending', -- pending, paid, overdue\par
+  metadata jsonb,\par
+  created_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- transactions (single-entry record, link to ledger_entries)\par
+CREATE TABLE transactions (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  estate_id uuid REFERENCES estates(id) NULL,\par
+  user_id uuid REFERENCES users(id) NULL,\par
+  type text NOT NULL, -- 'wallet_credit','wallet_debit','invoice_payment','settlement','fee'\par
+  amount numeric(14,2) NOT NULL,\par
+  currency text DEFAULT 'NGN',\par
+  provider text,\par
+  provider_reference text,\par
+  va_account_number text,\par
+  metadata jsonb,\par
+  created_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- ledger_entries for double-entry bookkeeping\par
+CREATE TABLE ledger_entries (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  transaction_id uuid REFERENCES transactions(id) ON DELETE CASCADE,\par
+  account text NOT NULL, -- e.g., 'tenant:wallet:<user_id>', 'estate:trust:<estate_id>', 'app:revenue'\par
+  entry_type text NOT NULL, -- 'debit' or 'credit'\par
+  amount numeric(14,2) NOT NULL,\par
+  currency text DEFAULT 'NGN',\par
+  created_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- settlements (payouts to vendors or estate transfers)\par
+CREATE TABLE settlements (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  estate_id uuid REFERENCES estates(id),\par
+  amount numeric(14,2) NOT NULL,\par
+  beneficiary text,\par
+  reference text,\par
+  status text DEFAULT 'pending', -- pending, success, failed\par
+  metadata jsonb,\par
+  created_at timestamptz DEFAULT now()\par
+);\par
+\par
+-- subscriptions (billing estates for your SaaS)\par
+CREATE TABLE subscriptions (\par
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\par
+  estate_id uuid REFERENCES estates(id),\par
+  plan text,\par
+  amount numeric(14,2),\par
+  cycle text, -- monthly, yearly\par
+  status text DEFAULT 'active',\par
+  provider_subscription_id text,\par
+  created_at timestamptz DEFAULT now()\par
+);\par
+```\par
+\par
+Notes:\par
+\par
+* Use `numeric(14,2)` for money; consider a money library for precision.\par
+* Use `jsonb metadata` to store provider payloads and flexibility.\par
+* Index `virtual_accounts(va_account_number)` for webhook lookup.\par
+\par
+---\par
+\par
+## 3) Ledger design (double-entry basics)\par
+\par
+Principles:\par
+\par
+* Every `transaction` must create exactly two or more `ledger_entries` that balance (sum credits == sum debits).\par
+* Example: Tenant pays \u8358?25,000 to top-up wallet via VA which settles to Estate Trust account.\par
+\par
+Example: Tenant wallet top-up (when the bank notifies you):\par
+\par
+* Transaction created: `\{type: 'wallet_credit', amount: 25000\}`\par
+* Ledger entries:\par
+\par
+  * Credit `estate:trust:<estate_id>` \u8358?25,000 (money arrived into estate trust account)\par
+  * Debit `tenant:wallet:<user_id>` \u8358?25,000 (wallet balance increases)\par
+\par
+When Estate pays vendor from Trust account:\par
+\par
+* Transaction `settlement` \u8358?10,000\par
+* Ledger entries:\par
+\par
+  * Credit `estate:expenses:vendor:<vendor_id>` \u8358?10,000\par
+  * Debit `estate:trust:<estate_id>` \u8358?10,000\par
+\par
+For App fee (if you charge a 2% platform fee on payments): when tenant pays \u8358?25,000\par
+\par
+* Platform fee = \u8358?500\par
+* Net to trust = \u8358?24,500\par
+* Ledger entries on original transaction:\par
+\par
+  * Credit `app:revenue` \u8358?500 (platform revenue)\par
+  * Credit `estate:trust` \u8358?24,500\par
+  * Debit `tenant:wallet` \u8358?25,000\par
+\par
+Important: Keep detailed `metadata` for reconciliations and provider receipts.\par
+\par
+---\par
+\par
+## 4) Node.js (Express) \emdash  API Endpoints (templates)\par
+\par
+### Project layout (minimal)\par
+\par
+```\par
+src/\par
+  controllers/\par
+  services/\par
+  routes/\par
+  models/\par
+  webhooks/\par
+  utils/\par
+  app.js\par
+```\par
+\par
+### .env example\par
+\par
+```\par
+PORT=3000\par
+DATABASE_URL=postgres://user:pass@localhost:5432/clannit\par
+FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST_xxx\par
+FLUTTERWAVE_PUBLIC_KEY=FLWPUBK_TEST_xxx\par
+WEBHOOK_SECRET=your_own_secret\par
+```\par
+\par
+### 1) Create static VA (service)\par
+\par
+```js\par
+// services/flutterwave.js\par
+const fetch = require('node-fetch');\par
+const FLW_KEY = process.env.FLUTTERWAVE_SECRET_KEY;\par
+\par
+async function createStaticVA(\{email, firstname, lastname, tx_ref, bvn, phonenumber\})\{\par
+  const res = await fetch('https://api.flutterwave.com/v3/virtual-account-numbers',\{\par
+    method:'POST',\par
+    headers: \{ 'Content-Type':'application/json', Authorization: `Bearer $\{FLW_KEY\}` \},\par
+    body: JSON.stringify(\{\par
+      email, firstname, lastname, tx_ref, bvn, phonenumber, is_permanent: true\par
+    \})\par
+  \});\par
+  const json = await res.json();\par
+  if(json.status !== 'success') throw new Error(JSON.stringify(json));\par
+  return json.data;\par
+\}\par
+\par
+module.exports = \{ createStaticVA \};\par
+```\par
+\par
+### 2) Endpoint to create VA on tenant signup\par
+\par
+```js\par
+// routes/va.js\par
+const express = require('express');\par
+const \{ createStaticVA \} = require('../services/flutterwave');\par
+const router = express.Router();\par
+\par
+router.post('/create', async (req,res)=>\{\par
+  const \{ email, firstname, lastname, tx_ref, bvn, phonenumber, user_id, estate_id \} = req.body;\par
+  try\{\par
+    const data = await createStaticVA(\{email, firstname, lastname, tx_ref, bvn, phonenumber\});\par
+    // save to DB virtual_accounts (pseudo)\par
+    await db.query('INSERT INTO virtual_accounts (user_id, estate_id, provider, va_account_number, bank_name, bank_code, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7)',\par
+      [user_id, estate_id, 'flutterwave', data.account_number, data.bank_name, data.bank_code, JSON.stringify(data)])\par
+    return res.json(\{ok:true, data\});\par
+  \}catch(err)\{\par
+    console.error(err);\par
+    return res.status(500).json(\{ok:false,error:err.message\});\par
+  \}\par
+\});\par
+\par
+module.exports = router;\par
+```\par
+\par
+### 3) Webhook receiver (important: verify signature)\par
+\par
+```js\par
+// webhooks/flutterwave.js\par
+const express = require('express');\par
+const router = express.Router();\par
+const crypto = require('crypto');\par
+\par
+function verifySignature(rawBody, signatureHeader)\{\par
+  const secret = process.env.WEBHOOK_SECRET; // set this to same value you register\par
+  const hash = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');\par
+  return signatureHeader === hash;\par
+\}\par
+\par
+router.post('/flutterwave', express.raw(\{type:'application/json'\}), async (req,res)=>\{\par
+  const sig = req.headers['verif-hash'] || req.headers['x-signature'];\par
+  const ok = verifySignature(req.body, sig);\par
+  if(!ok) return res.status(401).send('invalid signature');\par
+\par
+  const payload = JSON.parse(req.body.toString());\par
+  // Example event: transfer.success or virtual_account.transaction\par
+  const event = payload.event || payload.data?.status;\par
+  // Map payload -> internal transaction\par
+\par
+  // Lookup virtual_accounts by account_number\par
+  const account = payload.data?.account_number || payload.data?.account;\par
+  const amount = Number(payload.data?.amount || payload.data?.amount_in_kobo) / 100 || Number(payload.data?.amount);\par
+\par
+  // Pseudocode: find VA, create transaction, create ledger entries\par
+  // await createTransaction(\{userId, estateId, amount, provider:'flutterwave', provider_reference:payload.data.reference, va_account_number:account\})\par
+\par
+  return res.status(200).json(\{ok:true\});\par
+\});\par
+\par
+module.exports = router;\par
+```\par
+\par
+Notes:\par
+\par
+* Use `express.raw()` so you can verify the exact raw body for signature checks.\par
+* When developing, log payloads and test with Flutterwave test events.\par
+\par
+---\par
+\par
+## 5) Reconciliation & Webhook handling tips\par
+\par
+* Always store provider `payload` in `metadata` for audit.\par
+* Use `tx_ref` and `provider_reference` to dedupe events.\par
+* Keep an `event_log` table to replay webhooks if needed.\par
+* Implement a background job (cron) that compares bank settlements vs ledger to detect missing funds.\par
+\par
+---\par
+\par
+## 6) Subscription billing (charge estates for your app)\par
+\par
+Options:\par
+\par
+* Use Paystack or Flutterwave Subscriptions API.\par
+* Or implement Invoicing: generate invoice and charge estate's debit card or bank via tokenization.\par
+\par
+Example flow using Flutterwave: create a `plan` and subscribe the estate, store `provider_subscription_id` and webhook for payment.success to mark subscription active.\par
+\par
+---\par
+\par
+## 7) Example React/Next.js Admin Dashboard (simplified)\par
+\par
+### File: `components/InvoiceList.tsx`\par
+\par
+```tsx\par
+'use client'\par
+import React from 'react'\par
+\par
+export default function InvoiceList(\{invoices\}:\{invoices:any[]\})\{\par
+  return (\par
+    <div className="p-4">\par
+      <h2 className="text-xl font-bold">Invoices</h2>\par
+      <table className="w-full mt-4">\par
+        <thead><tr><th>Unit</th><th>Amount</th><th>Due</th><th>Status</th><th>Action</th></tr></thead>\par
+        <tbody>\par
+          \{invoices.map(inv => (\par
+            <tr key=\{inv.id\} className="border-t"><td>\{inv.unit_identifier\}</td><td>\u8358?\{inv.amount\}</td><td>\{new Date(inv.due_date).toLocaleDateString()\}</td><td>\{inv.status\}</td><td><button className="px-2 py-1 bg-blue-600 text-white rounded">Remind</button></td></tr>\par
+          ))\}\par
+        </tbody>\par
+      </table>\par
+    </div>\par
+  )\par
+\}\par
+```\par
+\par
+### Dashboard responsibilities\par
+\par
+* Create invoices\par
+* View virtual accounts and balances\par
+* Reconcile transactions\par
+* Initiate settlements to vendors\par
+* Manage subscription billing/cutoffs\par
+\par
+---\par
+\par
+## 8) Security & Compliance\par
+\par
+* Never store plain keys/secrets in code. Use environment variables and secret managers.\par
+* Use HTTPS and validate webhooks with shared secret or signature header.\par
+* Use strong input validation and rate limiting on endpoints.\par
+* Ensure logs do not leak PII.\par
+* Consider PCI/DSS only if you process cards directly \emdash  otherwise rely on Flutterwave/Paystack.\par
+\par
+---\par
+\par
+## 9) Testing & Staging\par
+\par
+* Create a staging Flutterwave account and test webhooks using ngrok to expose local endpoints.\par
+* Simulate duplicate webhooks and idempotency by using `provider_reference` to dedupe.\par
+* E2E Test scenario: tenant creates VA \f2\u8594?\f0  transfers to VA (send test webhook) \f2\u8594?\f0  wallet credited \f2\u8594?\f0  invoice auto-cleared \f2\u8594?\f0  ledger entries balanced\par
+\par
+---\par
+\par
+## 10) Deployment & Monitoring\par
+\par
+* Deploy API on a managed node host (Heroku, Render, Fly, DigitalOcean App Platform) or containerize with Docker and use Kubernetes if needed.\par
+* Use monitoring (Sentry, LogDNA) and instrument transactions (correlation ids).\par
+* Backups: schedule DB backups daily and secure backups of logs.\par
+\par
+---\par
+\par
+## 11) Example End-to-end sequence (summary)\par
+\par
+1. Tenant onboarded \f2\u8594?\f0  create `user`, `wallet`, `virtual_account` (static) via Flutterwave API\par
+2. Tenant funds VA (bank transfer) \f2\u8594?\f0  Flutterwave sends webhook\par
+3. Webhook handler verifies signature, finds VA record, creates `transaction` of type `wallet_credit` and ledger entries\par
+4. Wallet balance updated; invoice marked paid if matches reference\par
+5. Estate views dashboard and initiates settlement to vendor if required; settlement creates transaction and ledger entries\par
+6. App charges estate subscription via billing provider; subscription recorded in `subscriptions`\par
+\par
+---\par
+\par
+## 12) Next steps I can implement for you instantly\par
+\par
+* Provide a ready-to-run **Node/Express starter repo** (with routes, DB models, and VA integration code)\par
+* Generate **SQL migration files** for the schema above\par
+* Create **React/Next.js admin UI pages** (Invoices, VAs, Transactions)\par
+* Provide a **Mermaid architecture diagram** or a PNG\par
+\par
+Tell me which of those you'd like first and I will create it now.\lang9\par
+}
+ 

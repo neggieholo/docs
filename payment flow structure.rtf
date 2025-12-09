@@ -1,0 +1,199 @@
+{\rtf1\fbidis\ansi\ansicpg1252\deff0\nouicompat\deflang1033{\fonttbl{\f0\fnil\fcharset0 Calibri;}{\f1\fnil Calibri;}{\f2\fnil\fcharset1 Segoe UI Symbol;}{\f3\fnil\fcharset1 Segoe UI Emoji;}{\f4\fnil\fcharset1 Cambria Math;}{\f5\fnil\fcharset1 Segoe UI Symbol;}}
+{\*\generator Riched20 10.0.19041}{\*\mmathPr\mmathFont4\mwrapIndent1440 }\viewkind4\uc1 
+\pard\sa200\sl276\slmult1\f0\fs22\lang9 You're absolutely right \f1\emdash\par
+**Static Virtual Accounts are exactly what you need** for a Clannit-style app.\par
+\par
+Why? Because **each Tenant, Estate, or even Unit** needs a **permanent unique bank account** where they can receive payments or fund their wallet anytime \emdash  not just one-time deposits.\par
+\par
+---\par
+\par
+## \f2\u-10179?\u-8576?\f1  \f0 How Static Virtual Accounts Fit into Your Clannit Payment System\par
+\par
+| User Type                       | Assigned Static Virtual Account              | Purpose                                       |\par
+| ------------------------------- | -------------------------------------------- | --------------------------------------------- |\par
+| \f2\u-10180?\u-8224?\f1  \f0 Tenant                       | One permanent VA (wallet funding)            | Pay levies, wallet top-up, utility, rent      |\par
+| \f2\u-10180?\u-8222?\f1  \f0 Estate Management            | One VA mapped to Trust/Collection Account    | Collect all tenant payments (central account) |\par
+| \f3\u-10178?\u-8706?\f1  \f0 Vendors (PHCN, Water, Waste) | Optional VA                                  | Receive payouts transparently                 |\par
+| \f3\u-10179?\u-9112?\u8205?\f2\u-10179?\u-9028?\f1  \f0 App Creator               | No VA \f1\emdash  you use normal bank/Paystack Billing | Receive License Fees, Commissions             |\par
+\par
+---\par
+\par
+### \f2\u-10180?\u-8273?\f1  \f0 Why Static Virtual Accounts Are Perfect:\par
+\par
+| Feature                    | What it means for your app                                          |\par
+| -------------------------- | ------------------------------------------------------------------- |\par
+| Permanent (no expiry)      | Tenants can save the account and keep paying always                 |\par
+| Unique per tenant          | Easily identify **who paid, what unit, what purpose**               |\par
+| Bulk generation            | When onboarding an estate, you can auto-create 50\f1\endash 500 VAs for homes |\par
+| Can be connected to wallet | Every time they transfer to VA \f4\u8594?\f1  \f0 money appears in wallet            |\par
+| Can be linked to ledger    | All transactions are automatically recorded in your system          |\par
+\par
+---\par
+\par
+## \f2\u-10179?\u-8937?\f1  \f0 Real-Life Example\par
+\par
+**Imagine an Estate named \f1\ldblquote\f0 GreenVille Phase 2\f1\rdblquote  \f0 with 120 houses.**\par
+\par
+| User            | Assigned Virtual Account             |\par
+| --------------- | ------------------------------------ |\par
+| House 1 Tenant  | 0123456789 - Flutterwave (Wema Bank) |\par
+| House 2 Tenant  | 0123456790 - Access Bank             |\par
+| House 3 Tenant  | 0123456791 - GTBank                  |\par
+| Estate Admin    | 1002214488 - Zenith Bank             |\par
+| Security Vendor | 9004455533 - First Bank              |\par
+\par
+\f2\u-10179?\u-9055?\f1  \f0 So when **Tenant in House 2** transfers \f1\u8358?25,000 for monthly levy \f4\u8594?\f0\par
+you can detect it automatically, update wallet, issue receipt, and update ledger \f1\emdash  without doing manual reconciliation.\par
+\par
+---\par
+\par
+---\par
+\par
+# \f2\u-10179?\u-9000?\f1  \f0 How to Implement Static Virtual Accounts in Your App\par
+\par
+::< STEP-BY-STEP GUIDE >::\par
+\par
+---\par
+\par
+### \f2\u-10179?\u-8480?\f1  \f0 Step 1: Create a Virtual Account using Flutterwave API\par
+\par
+\f2\u-10179?\u-9143?\f1  \f0 When a **tenant signs up**, call Flutterwave API to generate their VA.\par
+\par
+**API Endpoint:**\par
+\par
+```\par
+POST /v3/virtual-account-numbers\par
+```\par
+\par
+**JSON Request Example:**\par
+\par
+```json\par
+\{\par
+  "email": "tenant1@example.com",\par
+  "bvn": "22345678901",\par
+  "is_permanent": true,\par
+  "tx_ref": "TENANT12345_GREENVILLE",\par
+  "firstname": "James",\par
+  "lastname": "Okoro",\par
+  "phonenumber": "08012345678"\par
+\}\par
+```\par
+\par
+**Response Example:**\par
+\par
+```json\par
+\{\par
+  "status": "success",\par
+  "data": \{\par
+    "order_ref": "URF_123456789",\par
+    "account_number": "0123456790",\par
+    "bank_name": "Wema Bank",\par
+    "bank_code": "035",\par
+    "expiry_date": null,\par
+    "amount": null\par
+  \}\par
+\}\par
+```\par
+\par
+\f2\u-10179?\u-9026?\f1  \f0 Save this data in your database in `VirtualAccounts` table.\par
+\par
+---\par
+\par
+### \f2\u-10180?\u-8233?\f1  \f0 Step 2: Design Database Tables to Store Virtual Account Info\par
+\par
+| Table            | Purpose                              |\par
+| ---------------- | ------------------------------------ |\par
+| users            | Users data                           |\par
+| virtual_accounts | Stores VA number, bank name, user_id |\par
+| wallets          | Wallet balance for each tenant       |\par
+| transactions     | Credit/Debits to wallets from VA     |\par
+| invoices         | Payment obligations (bills)          |\par
+| settlements      | Vendor payments (estate \f4\u8592?\u8594?\f1  \f0 vendors)  |\par
+\par
+---\par
+\par
+### \f2\u-10179?\u-8940?\f1  \f0 Step 3: Set Up **Webhook** to Detect Payments\par
+\par
+When tenant funds their VA, Flutterwave sends webhook to your app.\par
+\par
+Webhook sample:\par
+\par
+```json\par
+\{\par
+  "event": "transfer.success",\par
+  "data": \{\par
+    "account_number": "0123456790",\par
+    "amount": "25000",\par
+    "reference": "GREENVILLE_LEVY_OCT",\par
+    "sender_name": "James Okoro",\par
+    "narration": "Service Charge October"\par
+  \}\par
+\}\par
+```\par
+\par
+\f2\u-10179?\u-9055?\f1  \f0 Action your app will perform:\par
+\par
+| Action                                 | Description |\par
+| -------------------------------------- | ----------- |\par
+| Identify tenant using `account_number` |             |\par
+| Credit their wallet                    |             |\par
+| Mark invoice/bill as paid              |             |\par
+| Update ledger/transactions tables      |             |\par
+| Generate receipt automatically         |             |\par
+\par
+---\par
+\par
+---\par
+\par
+### \f3\u-10178?\u-8706?\f1  \f0 Step 4: Connect to Invoice System (Bills & Levies)\par
+\par
+\f5\u10004?\f1  \f0 Estate Admin uploads bills (e.g., \f1\u8358?20,000 service charge)\par
+\f5\u10004?\f1  \f0 Tenant pays using their VA \f4\u8594?\f1  \f0 Wallet credited \f4\u8594?\f1  \f0 Bill auto-cleared\par
+\par
+\f2\u-10179?\u-8903?\f1  \f0 The ledger tracks the bill and marks it **PAID**\par
+\f2\u-10179?\u-8903?\f1  \f0 Admin can see dashboard like:\par
+\par
+| Unit     | Bill    | Payment Date | Status  |\par
+| -------- | ------- | ------------ | ------- |\par
+| Block A1 | \f1\u8358?18,000 | 04/08/2025   | PAID    |\par
+| Block A2 | \u8358?18,000 | 07/08/2025   | Pending |\par
+| Block B1 | \u8358?18,000 | 04/08/2025   | PAID    |\par
+\par
+---\par
+\par
+---\par
+\par
+# \f2\u-10180?\u-8273?\f1  \f0 Final Summary: Why Static VA is What You Need\par
+\par
+| Feature               | Static VA           | PWBT (Normal Bank Transfer)   |\par
+| --------------------- | ------------------- | ----------------------------- |\par
+| Permanent             | \f5\u10004?\f1  \f0 Yes               | \f5\u10060?\f1  \f0 No                          |\par
+| Good for wallet       | \f5\u10004?\f1  \f0 Yes               | \f5\u10060?\f1  \f0 No                          |\par
+| Assignable per tenant | \f5\u10004?\f1  \f0 Yes               | \f5\u10060?\f1  \f0 No                          |\par
+| Expiry                | \f5\u10060?\f1  \f0 No                | \f5\u10004?\f1  \f0 Yes (expires after payment) |\par
+| Charge tracking       | \f5\u10004?\f1  \f0 Easy via webhooks | \f3\u9888?\u-497?\f1  \f0 Hard (manual matching)     |\par
+\par
+---\par
+\par
+# \f2\u-10179?\u-8576?\f1  \f0 Now What?\par
+\par
+I can help you implement next:\par
+\par
+\f2\u-10179?\u-9143?\f1  \f0 **Database designs for your app (Wallet, VA, Ledger, Bills)**\par
+\f2\u-10179?\u-9143?\f1  \f0 **Node.js or Django API endpoints for virtual accounts**\par
+\f2\u-10179?\u-9143?\f1  \f0 **Full Money Flow Diagram (Tenant \f4\u8594?\f1  \f0 Estate \f4\u8594?\f1  \f0 Vendors)**\par
+\f2\u-10179?\u-9143?\f1  \f0 **Flutterwave Integration Starter Code**\par
+\par
+---\par
+\par
+\f2\u-10179?\u-9055?\f1  \f0 What should I prepare next for you?\par
+\par
+\f3 1\u-497?\f5\u8419?\f0  Database Schema?\par
+\f3 2\u-497?\f5\u8419?\f0  API Endpoint templates?\par
+\f3 3\u-497?\f5\u8419?\f0  Flutterwave Integration Code in Node/Express?\par
+\f3 4\u-497?\f5\u8419?\f0  Dashboard mockup (React, Next.js)?\par
+\f3 5\u-497?\f5\u8419?\f0  Full architecture diagram?\par
+\par
+Let me know \f1\emdash  I\rquote ll build it with you step by step \f2\u-10179?\u-8576?\f0\lang9\par
+}
+ 
