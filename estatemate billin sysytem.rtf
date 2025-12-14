@@ -1,0 +1,233 @@
+{\rtf1\ansi\ansicpg1252\deff0\nouicompat\deflang1033{\fonttbl{\f0\fnil\fcharset0 Calibri;}{\f1\fnil Calibri;}}
+{\*\generator Riched20 10.0.19041}\viewkind4\uc1 
+\pard\sa200\sl276\slmult1\f0\fs22\lang9 OnSatemate Billing & Invoicing System Architecture\par
+==================================================\par
+\par
+1. Core Billing Concepts\par
+------------------------\par
+There are five major components:\par
+\par
+1. Billable Items \f1\endash  anything that generates a charge\par
+2. Invoices \endash  monthly or ad-hoc billing sheets\par
+3. Payments \endash  tenant payments to settle invoices\par
+4. Receipts \endash  proof of payment\par
+5. Account Ledgers \endash  running financial history per tenant\par
+\par
+--------------------------------------------------\par
+\par
+2. Billable Items\par
+-----------------\par
+Define all chargeable items for an estate.\par
+\par
+Examples:\par
+- Service Charge\par
+- Water\par
+- Electricity\par
+- Waste Management\par
+- Security Levy\par
+- Penalties (late payment, rule violations)\par
+- Repairs (custom admin-added charges)\par
+\par
+Table: billable_items\par
+\par
+Field          | Type                       | Notes\par
+-------------- | -------------------------- | -----------------\par
+id             | UUID                       | PK\par
+estate_id      | UUID                       | FK\par
+name           | String                     | e.g., "Water Bill"\par
+description    | Text                       | optional\par
+amount         | Numeric                    | default unit charge\par
+billing_cycle  | enum("monthly","one_time") | controls recurrence\par
+is_active      | boolean                    | active or not\par
+\par
+--------------------------------------------------\par
+\par
+3. Invoice Engine\par
+-----------------\par
+An Invoice is automatically generated monthly OR created manually by the admin.\par
+\par
+Table: invoices\par
+\par
+Field         | Type                                               | Notes\par
+------------- | ------------------------------------------------- | ------------------------\par
+id            | UUID                                               | PK\par
+tenant_id     | UUID                                               | FK\par
+estate_id     | UUID                                               | FK\par
+invoice_month | Date                                               | e.g., "2025-01-01"\par
+status        | enum("pending","partially_paid","paid","overdue") | \par
+total_amount  | Numeric                                            | Sum of all line items\par
+amount_paid   | Numeric                                            |\par
+balance_due   | Numeric                                            | computed\par
+\par
+Table: invoice_items\par
+\par
+Field      | Type    | Notes\par
+---------- | ------- | -----------------------------\par
+id         | UUID    |\par
+invoice_id | UUID    | FK\par
+item_name  | String  | snapshot of the billable item\par
+amount     | Numeric |\par
+quantity   | Number  | defaults to 1\par
+total      | Numeric | amount \f0\'d7 quantity\par
+\par
+--------------------------------------------------\par
+\par
+4. Monthly Invoice Generation Logic\par
+-----------------------------------\par
+Cron job runs monthly:\par
+\par
+for each estate:\par
+   for each active tenant:\par
+      fetch all billable_items where billing_cycle = "monthly"\par
+      create invoice\par
+\par
+Late fees:\par
+- If invoice is > X days past due, add penalty through a new invoice item.\par
+\par
+--------------------------------------------------\par
+\par
+5. Payments Architecture\par
+------------------------\par
+Tenants pay through Flutterwave, Paystack, or in-app wallet.\par
+\par
+Table: payments\par
+\par
+Field        | Type                               | Notes\par
+------------ | ---------------------------------- | -----------------------------------\par
+id           | UUID                               |\par
+tenant_id    | UUID                               |\par
+estate_id    | UUID                               |\par
+invoice_id   | UUID or null                       | payment may cover multiple invoices\par
+amount       | Numeric                            |\par
+channel      | enum("card","transfer","wallet")   |\par
+tx_ref       | String                             |\par
+payment_date | Timestamp                          |\par
+status       | enum("success","failed","pending") |\par
+\par
+Payment Flow:\par
+1. Tenant chooses invoice(s) to pay.\par
+2. Backend generates a tx_ref.\par
+3. Payment provider callback validates success.\par
+4. System allocates payment across invoices by priority (oldest first).\par
+5. Update invoice status accordingly.\par
+\par
+--------------------------------------------------\par
+\par
+6. Receipt System\par
+-----------------\par
+When a payment succeeds:\par
+\par
+create receipt:\par
+   receipt_number = random(10 digits)\par
+   payment_id -> link\par
+\par
+Table: receipts\par
+\par
+Field          | Type\par
+-------------- | ------\par
+id             | UUID\par
+payment_id     | UUID\par
+receipt_number | string\par
+amount         | numeric\par
+issued_on      | timestamp\par
+\par
+PDF receipts can be generated server-side.\par
+\par
+--------------------------------------------------\par
+\par
+7. Account Ledger\par
+-----------------\par
+Every financial event is logged.\par
+\par
+Table: ledger_entries\par
+\par
+Field        | Type                                             | Notes\par
+------------ | ------------------------------------------------ | ---------------------------\par
+id           | UUID                                             |\par
+tenant_id    | UUID                                             |\par
+type         | enum("invoice","payment","adjustment","penalty")|\par
+reference_id | UUID                                             | invoice_id or payment_id\par
+amount       | Numeric                                          | positive = charge, negative = credit\par
+running_balance | Numeric                                       |\par
+created_at   | Timestamp                                        |\par
+\par
+--------------------------------------------------\par
+\par
+8. Admin Dashboard Features\par
+---------------------------\par
+Estate Admin Can:\par
+- Create and edit billable items\par
+- View all invoices\par
+- Mark manual payments\par
+- Add custom charges (e.g., repair fee)\par
+- See outstanding amounts per tenant\par
+- Export monthly reports (CSV, Excel, PDF)\par
+- Automate reminder emails/SMS\par
+- Adjust/waive penalties\par
+\par
+--------------------------------------------------\par
+\par
+9. Tenant App Features\par
+----------------------\par
+Tenants Can:\par
+- View their outstanding invoices\par
+- View invoice details & line items\par
+- Pay online instantly\par
+- Download receipts\par
+- View billing history (ledger)\par
+- Receive automatic reminders\par
+\par
+--------------------------------------------------\par
+\par
+10. Invoice Rendering (Frontend)\par
+--------------------------------\par
+Invoice #INV-2025-001\par
+Tenant: John Doe\par
+Unit: Block A - 22\par
+Period: January 2025\par
+\par
+Items:\par
+---------------------------------------\par
+Description        Qty     Amount\par
+Service Charge      1      \f1\u8358?25,000\par
+Water Bill          1      \u8358?5,000\par
+Waste Disposal      1      \u8358?2,000\par
+---------------------------------------\par
+Total:              \u8358?32,000\par
+Amount Paid:        \u8358?0\par
+Balance:            \u8358?32,000\par
+\par
+--------------------------------------------------\par
+\par
+11. Payment Allocation Logic\par
+----------------------------\par
+When payment arrives:\par
+\par
+remaining_amount = payment.amount\par
+\par
+sorted_invoices = fetch unpaid invoices by oldest date\par
+\par
+for invoice in sorted_invoices:\par
+    if remaining_amount <= 0: break\par
+    \par
+    if invoice.balance_due <= remaining_amount:\par
+        allocate invoice.balance_due\par
+        invoice.mark_paid()\par
+        remaining_amount -= invoice.balance_due\par
+    else:\par
+        allocate partial payment\par
+        invoice.status = "partially_paid"\par
+        remaining_amount = 0\par
+\par
+--------------------------------------------------\par
+\par
+12. Next Step Options\par
+---------------------\par
+A. Database SQL schema (full CREATE TABLE statements)\par
+B. Backend API architecture (Express.js endpoints)\par
+C. Flutter/React Native UI wireframes for billing\par
+D. Cron job scripts for monthly billing\par
+E. Payment webhook design (for Paystack/Flutterwave)\par
+F. Full workflow diagrams\f0\par
+}
+ 
